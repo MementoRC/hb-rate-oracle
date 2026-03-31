@@ -1,9 +1,8 @@
 """CoinCap rate source — standalone HTTP + WebSocket implementation."""
 
-import asyncio
 import logging
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any
 
 import aiohttp
 
@@ -22,19 +21,19 @@ class CoinCapRateSource(RateSourceBase):
 
     def __init__(
         self,
-        assets_map: Optional[Dict[str, str]] = None,
+        assets_map: dict[str, str] | None = None,
         api_key: str = "",
     ):
         self._assets_map = assets_map or {}
         self._api_key = api_key
-        self._prices: Dict[str, Decimal] = {}
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._prices: dict[str, Decimal] = {}
+        self._session: aiohttp.ClientSession | None = None
 
     @property
     def name(self) -> str:
         return "coin_cap"
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         if self._api_key:
             return {"Authorization": f"Bearer {self._api_key}"}
         return {}
@@ -44,7 +43,7 @@ class CoinCapRateSource(RateSourceBase):
             self._session = aiohttp.ClientSession()
         return self._session
 
-    async def _request(self, endpoint: str, params: Optional[Dict] = None) -> Any:
+    async def _request(self, endpoint: str, params: dict | None = None) -> Any:
         session = await self._ensure_session()
         url = f"{BASE_REST_URL}{endpoint}"
         headers = self._get_headers()
@@ -52,7 +51,7 @@ class CoinCapRateSource(RateSourceBase):
             resp.raise_for_status()
             return await resp.json()
 
-    async def get_prices(self, quote_token: Optional[str] = None) -> Dict[str, Decimal]:
+    async def get_prices(self, quote_token: str | None = None) -> dict[str, Decimal]:
         if quote_token and quote_token.upper() != "USD":
             logger.warning("CoinCapRateSource only supports USD as quote token.")
             return {}
@@ -63,7 +62,7 @@ class CoinCapRateSource(RateSourceBase):
         asset_ids = ",".join(self._assets_map.keys())
         try:
             data = await self._request(ALL_ASSETS_ENDPOINT, params={"ids": asset_ids})
-            results: Dict[str, Decimal] = {}
+            results: dict[str, Decimal] = {}
             for asset in data.get("data", []):
                 asset_id = asset.get("id", "")
                 symbol = self._assets_map.get(asset_id, asset.get("symbol", "").upper())

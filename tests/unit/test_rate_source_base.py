@@ -1,7 +1,6 @@
 """Unit tests for rate_oracle.core.rate_source_base.RateSourceBase."""
 
 from decimal import Decimal
-from typing import Dict, Optional
 
 import pytest
 
@@ -45,7 +44,7 @@ class TestRateSourceBaseSubclass:
             def name(self) -> str:
                 return "concrete"
 
-            async def get_prices(self, quote_token: Optional[str] = None) -> Dict[str, Decimal]:
+            async def get_prices(self, quote_token: str | None = None) -> dict[str, Decimal]:
                 return {"BTC-USD": Decimal("50000")}
 
         source = ConcreteSource()
@@ -70,7 +69,7 @@ class TestRateSourceBaseSubclass:
             def name(self) -> str:
                 return "priced"
 
-            async def get_prices(self, quote_token=None) -> Dict[str, Decimal]:
+            async def get_prices(self, quote_token=None) -> dict[str, Decimal]:
                 return {"ETH-USD": Decimal("3000"), "BTC-USD": Decimal("50000")}
 
         source = PricedSource()
@@ -85,7 +84,7 @@ class TestRateSourceBaseSubclass:
             def name(self) -> str:
                 return "quote_aware"
 
-            async def get_prices(self, quote_token: Optional[str] = None) -> Dict[str, Decimal]:
+            async def get_prices(self, quote_token: str | None = None) -> dict[str, Decimal]:
                 token = quote_token or "USD"
                 return {f"BTC-{token}": Decimal("50000")}
 
