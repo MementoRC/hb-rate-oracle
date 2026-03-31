@@ -1,0 +1,64 @@
+[project]
+name = "hb-rate-oracle"
+dynamic = ["version"]
+description = "A modular rate oracle for cryptocurrency price conversion"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = [
+    "aiohttp>=3.8.0",
+    "pydantic>=2",
+]
+
+[build-system]
+requires = ["hatchling>=1.18.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "rate_oracle/__about__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["rate_oracle"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[tool.pixi.dependencies]
+python = ">=3.10,<3.13"
+aiohttp = ">=3.8.0"
+pydantic = ">=2"
+
+[tool.pixi.feature.dev.dependencies]
+pytest = ">=7.4.0"
+pytest-asyncio = ">=0.21.0"
+pytest-cov = "*"
+pytest-mock = "*"
+ruff = "*"
+mypy = "*"
+
+[tool.pixi.environments]
+default = { features = ["dev"], solve-group = "default" }
+
+[tool.pixi.tasks]
+test = "pytest tests/"
+test-unit = "pytest tests/unit/"
+lint = "ruff check rate_oracle tests"
+format = "ruff format rate_oracle tests"
+format-check = "ruff format --check rate_oracle tests"
+quality = { depends-on = ["lint", "format-check"] }
+check = { depends-on = ["quality", "test"] }
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP", "N", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.hummingbot.supersedes]
+test_paths = ["test/hummingbot/core/rate_oracle"]
+exchanges = ["coin_gecko", "coin_cap"]
