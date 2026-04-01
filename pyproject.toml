@@ -1,7 +1,7 @@
 [project]
 name = "hb-rate-oracle"
 dynamic = ["version"]
-description = "A modular rate oracle for cryptocurrency price conversion"
+description = "A modular rate oracle for cryptocurrency price conversion and rate sourcing"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 dependencies = [
