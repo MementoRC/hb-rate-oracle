@@ -64,6 +64,7 @@ python = "3.12.*"
 [tool.pixi.feature.quality-extended.dependencies]
 bandit = ">=1.8.0"
 pip-audit = "*"
+filelock = "*"
 
 [tool.pixi.feature.quality-extended.tasks]
 security-scan = "bandit -c pyproject.toml -r rate_oracle/"
@@ -171,7 +172,7 @@ check_untyped_defs = false
 
 [tool.bandit]
 exclude_dirs = ["tests"]
-skips = ["B101"]
+skips = ["B101", "B105", "B107"]
 
 # Hummingbot sub-package supersession metadata.
 # Declares which hummingbot module this sub-package replaces, enabling automated

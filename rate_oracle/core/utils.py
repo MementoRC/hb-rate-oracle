@@ -51,7 +51,7 @@ def find_rate(prices: dict[str, Decimal], pair: str) -> Decimal:
 
 def async_ttl_cache(ttl: int = 3600, maxsize: int = 1):
     """Async TTL cache decorator using cachetools."""
-    cache = cachetools.TTLCache(ttl=ttl, maxsize=maxsize)
+    cache: cachetools.TTLCache[str, object] = cachetools.TTLCache(ttl=ttl, maxsize=maxsize)
 
     def decorator(fn):
         @functools.wraps(fn)
