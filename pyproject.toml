@@ -49,6 +49,7 @@ pytest-timeout = ">=2.1.0"
 bandit = ">=1.8.0"
 pre-commit = ">=2.15.0"
 types-setuptools = "*"
+types-cachetools = "*"
 
 # Python version features
 [tool.pixi.feature.py310.dependencies]
@@ -60,12 +61,29 @@ python = "3.11.*"
 [tool.pixi.feature.py312.dependencies]
 python = "3.12.*"
 
+[tool.pixi.feature.quality-extended.dependencies]
+bandit = ">=1.8.0"
+pip-audit = "*"
+
+[tool.pixi.feature.quality-extended.tasks]
+security-scan = "bandit -c pyproject.toml -r rate_oracle/"
+safety-check = "pip-audit"
+
+[tool.pixi.feature.quality-ci.dependencies]
+python-build = "*"
+hatchling = "*"
+
+[tool.pixi.feature.quality-ci.tasks]
+build = "python -m build"
+
 [tool.pixi.environments]
 default = { features = ["dev"], solve-group = "default" }
 ci = { features = ["ci", "dev"], solve-group = "default" }
 py310 = { features = ["py310", "dev"], solve-group = "py310" }
 py311 = { features = ["py311", "dev"], solve-group = "py311" }
 py312 = { features = ["py312", "dev"], solve-group = "py312" }
+quality-extended = { features = ["quality-extended"], solve-group = "default" }
+quality-ci = { features = ["quality-ci"], solve-group = "default" }
 
 [tool.pixi.tasks]
 test = "pytest tests/"
