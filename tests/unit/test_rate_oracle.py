@@ -1,8 +1,7 @@
 """Unit tests for rate_oracle.core.rate_oracle.RateOracle."""
 
-import asyncio
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

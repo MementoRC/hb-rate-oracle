@@ -1,8 +1,7 @@
 """Unit tests for rate_oracle.sources.coin_gecko_source.CoinGeckoRateSource."""
 
-import asyncio
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -150,7 +149,7 @@ class TestCoinGeckoGetPricesRateLimited:
         source = CoinGeckoRateSource()
 
         async def mock_get_page(vs_currency, page):
-            raise IOError("Rate limited by CoinGecko")
+            raise OSError("Rate limited by CoinGecko")
 
         source._get_prices_page = mock_get_page
         source._extra_token_ids = []
@@ -169,7 +168,7 @@ class TestCoinGeckoGetPricesRateLimited:
         async def mock_get_page(vs_currency, page):
             fetched_pages.append(page)
             if page >= 3:
-                raise IOError("network error")
+                raise OSError("network error")
             return [_make_coin("btc", 50000.0)]
 
         source._get_prices_page = mock_get_page

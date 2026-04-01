@@ -2,12 +2,11 @@
 
 import functools
 from decimal import Decimal
-from typing import Dict, Tuple
 
 import cachetools
 
 
-def split_trading_pair(trading_pair: str) -> Tuple[str, str]:
+def split_trading_pair(trading_pair: str) -> tuple[str, str]:
     """Split 'BASE-QUOTE' into (base, quote)."""
     parts = trading_pair.split("-")
     return parts[0], parts[1] if len(parts) > 1 else ""
@@ -25,7 +24,7 @@ def unwrap_token_symbol(token: str) -> str:
     return token
 
 
-def find_rate(prices: Dict[str, Decimal], pair: str) -> Decimal:
+def find_rate(prices: dict[str, Decimal], pair: str) -> Decimal:
     """Find exchange rate for a trading pair, supporting reverse and one-hop lookups."""
     if pair in prices:
         return prices[pair]
@@ -52,7 +51,7 @@ def find_rate(prices: Dict[str, Decimal], pair: str) -> Decimal:
 
 def async_ttl_cache(ttl: int = 3600, maxsize: int = 1):
     """Async TTL cache decorator using cachetools."""
-    cache = cachetools.TTLCache(ttl=ttl, maxsize=maxsize)
+    cache: cachetools.TTLCache[str, object] = cachetools.TTLCache(ttl=ttl, maxsize=maxsize)
 
     def decorator(fn):
         @functools.wraps(fn)
