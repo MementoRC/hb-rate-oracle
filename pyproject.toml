@@ -33,6 +33,8 @@ pytest = ">=7.4.0"
 pytest-asyncio = ">=0.21.0"
 pytest-cov = "*"
 pytest-mock = "*"
+pytest-timeout = "*"
+pytest-xdist = "*"
 ruff = "*"
 mypy = "*"
 
@@ -57,7 +59,17 @@ select = ["E", "F", "I", "W", "B", "UP", "N", "SIM"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+markers = [
+    "unit: marks tests as unit tests",
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "live: marks tests that hit real external APIs (deselect with '-m \"not live\"')",
+]
+addopts = "--strict-markers --strict-config"
+minversion = "7.0"
 
 [tool.hummingbot.supersedes]
 test_paths = ["test/hummingbot/core/rate_oracle"]
