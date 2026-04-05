@@ -4,7 +4,7 @@ import asyncio
 import logging
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiohttp
 
@@ -36,20 +36,20 @@ class CoinGeckoRateSource(RateSourceBase):
 
     def __init__(
         self,
-        extra_token_ids: Optional[List[str]] = None,
+        extra_token_ids: list[str] | None = None,
         api_key: str = "",
         api_tier: CoinGeckoAPITier = CoinGeckoAPITier.PUBLIC,
     ):
         self._extra_token_ids = extra_token_ids or []
         self._api_key = api_key
         self._api_tier = api_tier
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
 
     @property
     def name(self) -> str:
         return "coin_gecko"
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         if self._api_key and self._api_tier.header_key:
             return {self._api_tier.header_key: self._api_key}
         return {}
@@ -59,7 +59,7 @@ class CoinGeckoRateSource(RateSourceBase):
             self._session = aiohttp.ClientSession()
         return self._session
 
-    async def _request(self, endpoint: str, params: Optional[Dict] = None) -> Any:
+    async def _request(self, endpoint: str, params: dict | None = None) -> Any:
         session = await self._ensure_session()
         url = f"{self._api_tier.base_url}{endpoint}"
         headers = self._get_headers()
@@ -67,11 +67,11 @@ class CoinGeckoRateSource(RateSourceBase):
             if resp.status == 429:
                 logger.warning(f"CoinGecko rate limit hit, cooling off {COOLOFF_AFTER_BAN}s")
                 await asyncio.sleep(COOLOFF_AFTER_BAN)
-                raise IOError("Rate limited by CoinGecko")
+                raise OSError("Rate limited by CoinGecko")
             resp.raise_for_status()
             return await resp.json()
 
-    async def _get_prices_page(self, vs_currency: str, page: int) -> List[Dict]:
+    async def _get_prices_page(self, vs_currency: str, page: int) -> list[dict]:
         params = {
             "vs_currency": vs_currency,
             "order": "market_cap_desc",
@@ -81,7 +81,7 @@ class CoinGeckoRateSource(RateSourceBase):
         }
         return await self._request(self.PRICES_ENDPOINT, params)
 
-    async def _get_prices_by_ids(self, vs_currency: str, token_ids: List[str]) -> List[Dict]:
+    async def _get_prices_by_ids(self, vs_currency: str, token_ids: list[str]) -> list[dict]:
         params = {
             "vs_currency": vs_currency,
             "ids": ",".join(token_ids),
@@ -90,11 +90,11 @@ class CoinGeckoRateSource(RateSourceBase):
         return await self._request(self.PRICES_ENDPOINT, params)
 
     @async_ttl_cache(ttl=int(COOLOFF_AFTER_BAN), maxsize=1)
-    async def get_prices(self, quote_token: Optional[str] = None) -> Dict[str, Decimal]:
+    async def get_prices(self, quote_token: str | None = None) -> dict[str, Decimal]:
         if not quote_token:
             quote_token = "USD"
         vs_currency = quote_token.lower()
-        results: Dict[str, Decimal] = {}
+        results: dict[str, Decimal] = {}
 
         # Fetch 7 pages of top coins by market cap
         for page in range(1, 8):
