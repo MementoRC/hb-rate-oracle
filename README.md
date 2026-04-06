@@ -157,13 +157,19 @@ rate_oracle/
     └── __init__.py           # Hummingbot compatibility layer
 ```
 
+## Features
+
+- Multi-source price aggregation
+- Configurable rate providers
+- Drop-in replacement for hummingbot via `hb_compat` layer
+
 ## Contributing
 
 See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for guidelines on contributing to this project.
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) for details.
+Apache-2.0 — see [LICENSE](LICENSE)
 
 ## Related Projects
 
