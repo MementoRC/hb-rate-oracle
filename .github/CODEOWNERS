@@ -1,0 +1,37 @@
+# CODEOWNERS file for hb-rate-oracle
+# This file defines code ownership and review requirements for different parts of the repository.
+# Users and teams mentioned here will be automatically requested for review when changes are made.
+
+# Default owners for everything in the repo
+* @MementoRC
+
+# Core Components - Critical business logic requiring careful review
+/rate_oracle/core/ @MementoRC
+/rate_oracle/sources/ @MementoRC
+
+# Hummingbot Compatibility Layer - Drop-in replacement for hummingbot.core.rate_oracle
+/rate_oracle/hb_compat/ @MementoRC
+
+# Testing Infrastructure - QA and reliability focus
+/tests/ @MementoRC
+/tests/unit/ @MementoRC
+/tests/integration/ @MementoRC
+
+# CI/CD and GitHub Workflows - DevOps and automation
+/.github/ @MementoRC
+/.github/workflows/ @MementoRC
+/.github/dependabot.yml @MementoRC
+
+# Configuration Files - Infrastructure and dependency management
+/pyproject.toml @MementoRC
+
+# Documentation - Content and structure review
+/docs/ @MementoRC
+/README.md @MementoRC
+/CHANGELOG.md @MementoRC
+/CONTRIBUTING.md @MementoRC
+
+# Security and Compliance
+/SECURITY.md @MementoRC
+/.github/SECURITY.md @MementoRC
+/.secrets.baseline @MementoRC

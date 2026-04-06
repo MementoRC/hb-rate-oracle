@@ -1,6 +1,5 @@
 """Unit tests for rate_oracle.core.utils."""
 
-import asyncio
 from decimal import Decimal
 
 import pytest

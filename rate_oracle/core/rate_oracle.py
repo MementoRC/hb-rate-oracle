@@ -3,7 +3,6 @@
 import asyncio
 import logging
 from decimal import Decimal
-from typing import Dict, Optional
 
 from rate_oracle.core.rate_source_base import RateSourceBase
 from rate_oracle.core.utils import find_rate
@@ -16,18 +15,18 @@ class RateOracle:
 
     def __init__(
         self,
-        source: Optional[RateSourceBase] = None,
+        source: RateSourceBase | None = None,
         quote_token: str = "USD",
     ):
         self._source = source
         self._quote_token = quote_token
-        self._prices: Dict[str, Decimal] = {}
+        self._prices: dict[str, Decimal] = {}
         self._started = False
-        self._update_task: Optional[asyncio.Task] = None
+        self._update_task: asyncio.Task | None = None
         self._update_interval: float = 5.0
 
     @property
-    def source(self) -> Optional[RateSourceBase]:
+    def source(self) -> RateSourceBase | None:
         return self._source
 
     @source.setter
@@ -39,7 +38,7 @@ class RateOracle:
         return self._quote_token
 
     @property
-    def prices(self) -> Dict[str, Decimal]:
+    def prices(self) -> dict[str, Decimal]:
         return self._prices.copy()
 
     def get_pair_rate(self, pair: str) -> Decimal:
