@@ -5,7 +5,7 @@ description = "A modular rate oracle for cryptocurrency price conversion and rat
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "aiohttp>=3.8.0",
+    "aiohttp>=3.13.5",
     "cachetools>=5.0.0",
     "pydantic>=2",
 ]
