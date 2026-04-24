@@ -11,9 +11,6 @@ permissions: read-all
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - name: Import GPG key and configure Git
         if: ${{ secrets.CI_BOT_GPG_KEY != '' }}
