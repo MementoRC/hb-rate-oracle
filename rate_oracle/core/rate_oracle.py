@@ -61,7 +61,7 @@ class RateOracle:
         if self._started:
             return
         self._started = True
-        self._update_task = asyncio.ensure_future(self._update_loop())
+        self._update_task = asyncio.create_task(self._update_loop())
 
     async def stop(self):
         """Stop periodic price updates."""

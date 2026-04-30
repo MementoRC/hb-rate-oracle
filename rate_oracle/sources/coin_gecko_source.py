@@ -4,7 +4,7 @@ import asyncio
 import logging
 from decimal import Decimal
 from enum import Enum
-from typing import Any
+from typing import Any, override
 
 import aiohttp
 
@@ -45,6 +45,7 @@ class CoinGeckoRateSource(RateSourceBase):
         self._api_tier = api_tier
         self._session: aiohttp.ClientSession | None = None
 
+    @override
     @property
     def name(self) -> str:
         return "coin_gecko"
@@ -89,6 +90,7 @@ class CoinGeckoRateSource(RateSourceBase):
         }
         return await self._request(self.PRICES_ENDPOINT, params)
 
+    @override
     @async_ttl_cache(ttl=int(COOLOFF_AFTER_BAN), maxsize=1)
     async def get_prices(self, quote_token: str | None = None) -> dict[str, Decimal]:
         if not quote_token:
