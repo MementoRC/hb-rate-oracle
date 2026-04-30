@@ -2,7 +2,7 @@
 
 import logging
 from decimal import Decimal
-from typing import Any
+from typing import Any, override
 
 import aiohttp
 
@@ -29,6 +29,7 @@ class CoinCapRateSource(RateSourceBase):
         self._prices: dict[str, Decimal] = {}
         self._session: aiohttp.ClientSession | None = None
 
+    @override
     @property
     def name(self) -> str:
         return "coin_cap"
@@ -51,6 +52,7 @@ class CoinCapRateSource(RateSourceBase):
             resp.raise_for_status()
             return await resp.json()
 
+    @override
     async def get_prices(self, quote_token: str | None = None) -> dict[str, Decimal]:
         if quote_token and quote_token.upper() != "USD":
             logger.warning("CoinCapRateSource only supports USD as quote token.")
