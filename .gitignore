@@ -14,3 +14,7 @@ htmlcov/
 
 # Git worktrees (per submodule worktree workflow)
 .worktrees/
+
+# Project management and AI development tools (local-only)
+.claude/
+.mcp.json
