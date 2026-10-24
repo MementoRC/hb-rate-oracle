@@ -94,7 +94,7 @@ class TestCoinGeckoGetPricesSuccess:
         source._extra_token_ids = []
 
         # Clear the TTL cache so our mock is actually called
-        source.get_prices.cache_clear()
+        source._fetch_prices.cache_clear()
 
         prices = await source.get_prices(quote_token="USD")
 
@@ -115,7 +115,7 @@ class TestCoinGeckoGetPricesSuccess:
 
         source._get_prices_page = mock_get_page
         source._extra_token_ids = []
-        source.get_prices.cache_clear()
+        source._fetch_prices.cache_clear()
 
         prices = await source.get_prices(quote_token="USD")
         assert "SOL-USD" in prices
@@ -135,7 +135,7 @@ class TestCoinGeckoGetPricesSuccess:
 
         source._get_prices_page = mock_get_page
         source._extra_token_ids = []
-        source.get_prices.cache_clear()
+        source._fetch_prices.cache_clear()
 
         prices = await source.get_prices(quote_token="USD")
         assert "BTC-USD" not in prices
@@ -153,7 +153,7 @@ class TestCoinGeckoGetPricesRateLimited:
 
         source._get_prices_page = mock_get_page
         source._extra_token_ids = []
-        source.get_prices.cache_clear()
+        source._fetch_prices.cache_clear()
 
         # Should not raise — the exception is caught per-page and breaks
         prices = await source.get_prices(quote_token="USD")
@@ -173,7 +173,7 @@ class TestCoinGeckoGetPricesRateLimited:
 
         source._get_prices_page = mock_get_page
         source._extra_token_ids = []
-        source.get_prices.cache_clear()
+        source._fetch_prices.cache_clear()
 
         await source.get_prices(quote_token="USD")
         # Pages 1, 2 succeed; page 3 fails and breaks
@@ -199,7 +199,7 @@ class TestCoinGeckoGetPricesWithExtraIds:
 
         source._get_prices_page = mock_get_page
         source._get_prices_by_ids = mock_get_by_ids
-        source.get_prices.cache_clear()
+        source._fetch_prices.cache_clear()
 
         prices = await source.get_prices(quote_token="USD")
         assert "SHIB-USD" in prices
@@ -218,7 +218,7 @@ class TestCoinGeckoGetPricesWithExtraIds:
 
         source._get_prices_page = mock_get_page
         source._get_prices_by_ids = mock_get_by_ids
-        source.get_prices.cache_clear()
+        source._fetch_prices.cache_clear()
 
         prices = await source.get_prices(quote_token="USD")
         assert prices == {}
@@ -238,7 +238,87 @@ class TestCoinGeckoGetPricesWithExtraIds:
 
         source._get_prices_page = mock_get_page
         source._get_prices_by_ids = mock_get_by_ids
-        source.get_prices.cache_clear()
+        source._fetch_prices.cache_clear()
 
         await source.get_prices(quote_token="USD")
         assert by_ids_called == []
+
+
+class TestCoinGeckoPartialResultsNotCached:
+    async def test_page_failure_not_cached(self):
+        """A partial result from a failed page is returned but refetched next call."""
+        source = CoinGeckoRateSource()
+        source._fetch_prices.cache_clear()
+        calls: list[int] = []
+        fail = True
+
+        async def mock_get_page(vs_currency, page):
+            calls.append(page)
+            if fail and page == 2:
+                raise OSError("network error")
+            return [_make_coin(f"c{page}", float(page))]
+
+        source._get_prices_page = mock_get_page
+
+        partial = await source.get_prices(quote_token="USD")
+        assert set(partial) == {"C1-USD"}
+
+        fail = False
+        calls.clear()
+        full = await source.get_prices(quote_token="USD")
+        assert calls == [1, 2, 3, 4, 5, 6, 7]
+        assert len(full) == 7
+
+    async def test_extra_ids_failure_not_cached(self):
+        """A failed extra-ids fetch returns results without extras and is refetched."""
+        source = CoinGeckoRateSource(extra_token_ids=["pepe"])
+        source._fetch_prices.cache_clear()
+        by_ids_calls = 0
+        fail = True
+
+        async def mock_get_page(vs_currency, page):
+            return [_make_coin("btc", 50000.0)] if page == 1 else []
+
+        async def mock_get_by_ids(vs_currency, token_ids):
+            nonlocal by_ids_calls
+            by_ids_calls += 1
+            if fail:
+                raise Exception("API error")
+            return [_make_coin("pepe", 0.1)]
+
+        source._get_prices_page = mock_get_page
+        source._get_prices_by_ids = mock_get_by_ids
+
+        partial = await source.get_prices(quote_token="USD")
+        assert set(partial) == {"BTC-USD"}
+
+        fail = False
+        full = await source.get_prices(quote_token="USD")
+        assert by_ids_calls == 2
+        assert set(full) == {"BTC-USD", "PEPE-USD"}
+
+    async def test_complete_fetch_is_cached(self):
+        """A complete fetch is cached; the second call does not hit the fetchers."""
+        source = CoinGeckoRateSource(extra_token_ids=["pepe"])
+        source._fetch_prices.cache_clear()
+        page_calls = 0
+        by_ids_calls = 0
+
+        async def mock_get_page(vs_currency, page):
+            nonlocal page_calls
+            page_calls += 1
+            return [_make_coin("btc", 50000.0)] if page == 1 else []
+
+        async def mock_get_by_ids(vs_currency, token_ids):
+            nonlocal by_ids_calls
+            by_ids_calls += 1
+            return [_make_coin("pepe", 0.1)]
+
+        source._get_prices_page = mock_get_page
+        source._get_prices_by_ids = mock_get_by_ids
+
+        first = await source.get_prices(quote_token="USD")
+        second = await source.get_prices(quote_token="USD")
+        assert first == second
+        assert page_calls == 7
+        assert by_ids_calls == 1

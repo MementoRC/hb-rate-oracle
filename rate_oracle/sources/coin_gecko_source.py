@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 COOLOFF_AFTER_BAN = 60.0 * 1.05
 
 
+class _IncompletePricesError(Exception):
+    """Raised when a fetch partially failed; carries the best-effort results."""
+
+    def __init__(self, partial: dict[str, Decimal]):
+        super().__init__("Incomplete CoinGecko prices")
+        self.partial = partial
+
+
 class CoinGeckoAPITier(Enum):
     PUBLIC = ("public", "", "https://api.coingecko.com/api/v3", 10)
     DEMO = ("demo", "x-cg-demo-api-key", "https://api.coingecko.com/api/v3", 50)
@@ -91,12 +99,18 @@ class CoinGeckoRateSource(RateSourceBase):
         return await self._request(self.PRICES_ENDPOINT, params)
 
     @override
-    @async_ttl_cache(ttl=int(COOLOFF_AFTER_BAN), maxsize=1)
     async def get_prices(self, quote_token: str | None = None) -> dict[str, Decimal]:
-        if not quote_token:
-            quote_token = "USD"
+        try:
+            return await self._fetch_prices(quote_token or "USD")
+        except _IncompletePricesError as e:
+            return e.partial
+
+    @async_ttl_cache(ttl=int(COOLOFF_AFTER_BAN), maxsize=1)
+    async def _fetch_prices(self, quote_token: str) -> dict[str, Decimal]:
+        """Fetch all prices; raises _IncompletePricesError (never cached) on any failure."""
         vs_currency = quote_token.lower()
         results: dict[str, Decimal] = {}
+        complete = True
 
         # Fetch 7 pages of top coins by market cap
         for page in range(1, 8):
@@ -110,6 +124,7 @@ class CoinGeckoRateSource(RateSourceBase):
                         results[pair] = Decimal(str(price))
             except Exception as e:
                 logger.warning(f"Error fetching CoinGecko page {page}: {e}")
+                complete = False
                 break
 
         # Fetch extra token IDs
@@ -124,7 +139,10 @@ class CoinGeckoRateSource(RateSourceBase):
                         results[pair] = Decimal(str(price))
             except Exception as e:
                 logger.warning(f"Error fetching extra token IDs: {e}")
+                complete = False
 
+        if not complete:
+            raise _IncompletePricesError(results)
         return results
 
     async def close(self):
