@@ -18,3 +18,5 @@ htmlcov/
 # Project management and AI development tools (local-only)
 .claude/
 .mcp.json
+# Claude Code hook logs written to <cwd>/logs/<session-id>/
+/logs/
