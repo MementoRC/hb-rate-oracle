@@ -3,18 +3,13 @@
 import asyncio
 import logging
 from decimal import Decimal
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from rate_limit.testing import ManualClock
 
-from rate_oracle.sources import coin_gecko_source
-from rate_oracle.sources.coin_gecko_source import (
-    COOLOFF_AFTER_BAN,
-    CoinGeckoAPITier,
-    CoinGeckoRateSource,
-)
-from rate_oracle.sources.rate_limit import RateLimitedError
+from rate_oracle.sources.coin_gecko_source import CoinGeckoAPITier, CoinGeckoRateSource
+from rate_oracle.sources.rate_limit import RateLimitedError, build_limiter
 
 
 def _make_coin(symbol: str, price: float) -> dict:
@@ -49,6 +44,36 @@ def _make_session(response_cm):
     session = MagicMock()
     session.closed = False
     session.get = MagicMock(return_value=response_cm)
+    return session
+
+
+def _make_paced_source(
+    clock: ManualClock | None = None,
+    api_tier: CoinGeckoAPITier = CoinGeckoAPITier.PUBLIC,
+    extra_token_ids: list[str] | None = None,
+) -> tuple[CoinGeckoRateSource, ManualClock]:
+    """A source whose limiter runs on a manual clock (sleeping just advances it)."""
+    clock = clock or ManualClock()
+    limiter = build_limiter(clock=clock, sleep=clock.sleep)
+    source = CoinGeckoRateSource(
+        extra_token_ids=extra_token_ids, api_tier=api_tier, rate_limiter=limiter
+    )
+    source._fetch_prices.cache_clear()
+    return source, clock
+
+
+def _make_paged_session(rate_limited_page: str | None, price_scale: float = 1.0):
+    """Session serving one coin per page; `rate_limited_page` answers 429 (Retry-After 120)."""
+
+    def fake_get(url, params=None, headers=None):
+        page = params["page"]
+        if page == rate_limited_page:
+            return _make_429_response("120")
+        return _make_ok_response([_make_coin(f"c{page}", float(page) * price_scale)])
+
+    session = MagicMock()
+    session.closed = False
+    session.get = MagicMock(side_effect=fake_get)
     return session
 
 
@@ -172,26 +197,16 @@ class TestCoinGeckoGetPricesSuccess:
 class TestCoinGeckoGetPricesRateLimited:
     @pytest.mark.asyncio
     async def test_get_prices_rate_limited(self):
-        """A RateLimitedError breaks the page loop, skips extra ids and sets backoff."""
-        source = CoinGeckoRateSource(extra_token_ids=["pepe"])
-        by_ids_called = []
-
-        async def mock_get_page(vs_currency, page):
-            raise RateLimitedError(120.0)
-
-        async def mock_get_by_ids(vs_currency, token_ids):
-            by_ids_called.append(True)
-            return []
-
-        source._get_prices_page = mock_get_page
-        source._get_prices_by_ids = mock_get_by_ids
-        source._fetch_prices.cache_clear()
+        """A 429 breaks the page loop, skips extra ids and puts the limiter in backoff."""
+        source, _ = _make_paced_source(extra_token_ids=["pepe"])
+        session = _make_session(_make_429_response("120"))
+        source._session = session
 
         # Should not raise — the exception is caught per-page and breaks
         prices = await source.get_prices(quote_token="USD")
         assert prices == {}
-        assert by_ids_called == []
-        assert source._rate_limited_until > 0.0
+        assert session.get.call_count == 1  # neither further pages nor the extra-ids request
+        assert source._limiter.is_paused("coin_gecko")
 
     @pytest.mark.asyncio
     async def test_request_429_raises_without_sleeping(self, monkeypatch):
@@ -208,56 +223,34 @@ class TestCoinGeckoGetPricesRateLimited:
         sleep.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_request_429_without_header_uses_default(self):
-        source = CoinGeckoRateSource()
-        source._session = _make_session(_make_429_response(None))
-
-        with pytest.raises(RateLimitedError) as exc_info:
-            await source._request("/coins/markets")
-
-        assert exc_info.value.retry_after == COOLOFF_AFTER_BAN
-
     @pytest.mark.asyncio
-    async def test_backoff_short_circuits_then_resumes(self, monkeypatch, caplog):
+    async def test_backoff_short_circuits_then_resumes(self, caplog):
         """429 on page 2: partial returned uncached, no HTTP inside the window, refetch after."""
-        clock = [1000.0]
-        monkeypatch.setattr(coin_gecko_source, "time", SimpleNamespace(monotonic=lambda: clock[0]))
-        sleep = AsyncMock()
-        monkeypatch.setattr(asyncio, "sleep", sleep)
-        source = CoinGeckoRateSource()
-        source._fetch_prices.cache_clear()
-        limited = True
-
-        def fake_get(url, params=None, headers=None):
-            if limited and params["page"] == "2":
-                return _make_429_response("120")
-            return _make_ok_response([_make_coin(f"c{params['page']}", float(params["page"]))])
-
-        session = _make_session(None)
-        session.get = MagicMock(side_effect=fake_get)
+        source, clock = _make_paced_source()
+        session = _make_paged_session(rate_limited_page="2")
         source._session = session
 
-        with caplog.at_level(logging.WARNING, logger="rate_oracle.sources.coin_gecko_source"):
+        with caplog.at_level(logging.WARNING):
             partial = await source.get_prices(quote_token="USD")
         assert set(partial) == {"C1-USD"}
         assert session.get.call_count == 2
-        sleep.assert_not_called()
-        assert sum("rate limit" in r.message.lower() for r in caplog.records) == 1
+        assert sum("rate limited" in r.message.lower() for r in caplog.records) == 1
 
         # Inside the window: zero HTTP calls, no further warnings
         caplog.clear()
-        clock[0] += 119.0
-        with caplog.at_level(logging.WARNING, logger="rate_oracle.sources.coin_gecko_source"):
+        clock.advance(119.0)
+        with caplog.at_level(logging.WARNING):
             assert await source.get_prices(quote_token="USD") == {}
         assert session.get.call_count == 2
         assert not caplog.records
 
         # After the window: fetches again (partial was not cached)
-        limited = False
-        clock[0] += 2.0
+        session.get.side_effect = _make_paged_session(rate_limited_page=None).get.side_effect
+        clock.advance(2.0)
         full = await source.get_prices(quote_token="USD")
         assert session.get.call_count == 2 + 7
         assert len(full) == 7
+        assert clock.sleeps == []
 
     @pytest.mark.asyncio
     async def test_get_prices_page_error_stops_pagination(self):
@@ -425,28 +418,16 @@ class TestCoinGeckoPartialResultsNotCached:
 
 
 class TestCoinGeckoLastGoodPrices:
-    async def test_rate_limited_partial_merges_over_last_good(self, monkeypatch):
+    async def test_rate_limited_partial_merges_over_last_good(self):
         """A 429 mid-cycle keeps last known prices for unfetched pages; backoff returns them."""
-        clock = [1000.0]
-        monkeypatch.setattr(coin_gecko_source, "time", SimpleNamespace(monotonic=lambda: clock[0]))
-        source = CoinGeckoRateSource()
-        source._fetch_prices.cache_clear()
-        limited = False
-        price_scale = 1.0
-
-        async def mock_get_page(vs_currency, page):
-            if limited and page == 2:
-                raise RateLimitedError(120.0)
-            return [_make_coin(f"c{page}", page * price_scale)]
-
-        source._get_prices_page = mock_get_page
+        source, clock = _make_paced_source(api_tier=CoinGeckoAPITier.PRO)
+        source._session = _make_paged_session(rate_limited_page=None)
 
         good = await source.get_prices(quote_token="USD")
         assert len(good) == 7
 
         source._fetch_prices.cache_clear()
-        limited = True
-        price_scale = 10.0
+        source._session = _make_paged_session(rate_limited_page="2", price_scale=10.0)
         merged = await source.get_prices(quote_token="USD")
         assert merged["C1-USD"] == Decimal("10.0")  # fresh from page 1
         assert merged["C2-USD"] == good["C2-USD"]  # last known
@@ -454,16 +435,43 @@ class TestCoinGeckoLastGoodPrices:
 
         # Partial must not overwrite the last good snapshot
         assert await source.get_prices(quote_token="USD") == good
+        assert clock.sleeps == []
 
-    async def test_cold_start_backoff_returns_empty(self, monkeypatch):
-        clock = [1000.0]
-        monkeypatch.setattr(coin_gecko_source, "time", SimpleNamespace(monotonic=lambda: clock[0]))
-        source = CoinGeckoRateSource()
+    async def test_cold_start_backoff_returns_empty(self):
+        source, _ = _make_paced_source()
+        session = _make_session(_make_429_response("120"))
+        source._session = session
+
+        assert await source.get_prices(quote_token="USD") == {}
+        assert await source.get_prices(quote_token="USD") == {}
+        assert session.get.call_count == 1
+
+
+class TestCoinGeckoPacing:
+    @pytest.mark.parametrize("tier", list(CoinGeckoAPITier))
+    async def test_tier_capacity_then_wait(self, tier):
+        """A tier's budget is sent without waiting; the next request waits for one refill."""
+        source, clock = _make_paced_source(api_tier=tier)
+        source._session = _make_session(_make_ok_response([]))
+
+        for _ in range(tier.rate_limit):
+            await source._request("/coins/markets")
+        assert clock.sleeps == []
+
+        await source._request("/coins/markets")
+        assert clock.sleeps == [pytest.approx(60.0 / tier.rate_limit)]
+
+    async def test_cycles_are_paced_against_the_tier_budget(self):
+        """Two 8-request cycles exceed the public 10/min budget, so the second one waits."""
+        source, clock = _make_paced_source(extra_token_ids=["pepe"])
+        session = _make_session(_make_ok_response([_make_coin("btc", 1.0)]))
+        source._session = session
+
+        await source.get_prices(quote_token="USD")
+        assert session.get.call_count == 8
+        assert clock.sleeps == []
+
         source._fetch_prices.cache_clear()
-
-        async def mock_get_page(vs_currency, page):
-            raise RateLimitedError(120.0)
-
-        source._get_prices_page = mock_get_page
-        assert await source.get_prices(quote_token="USD") == {}
-        assert await source.get_prices(quote_token="USD") == {}
+        await source.get_prices(quote_token="USD")
+        assert session.get.call_count == 16
+        assert clock.sleeps

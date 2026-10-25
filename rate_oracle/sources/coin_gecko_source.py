@@ -1,20 +1,26 @@
 """CoinGecko rate source — standalone HTTP implementation."""
 
 import logging
-import time
 from decimal import Decimal
 from enum import Enum
 from typing import Any, override
 
 import aiohttp
+from rate_limit import RateLimiter
 
 from rate_oracle.core.rate_source_base import RateSourceBase
 from rate_oracle.core.utils import async_ttl_cache, combine_trading_pair
-from rate_oracle.sources.rate_limit import RateLimitedError, parse_retry_after
+from rate_oracle.sources.rate_limit import (
+    RateLimitedError,
+    build_limiter,
+    paced_get,
+    requests_per_minute,
+)
 
 logger = logging.getLogger(__name__)
 
 COOLOFF_AFTER_BAN = 60.0 * 1.05
+LIMIT_ID = "coin_gecko"
 
 
 class _IncompletePricesError(Exception):
@@ -48,12 +54,14 @@ class CoinGeckoRateSource(RateSourceBase):
         extra_token_ids: list[str] | None = None,
         api_key: str = "",
         api_tier: CoinGeckoAPITier = CoinGeckoAPITier.PUBLIC,
+        rate_limiter: RateLimiter | None = None,
     ):
         self._extra_token_ids = extra_token_ids or []
         self._api_key = api_key
         self._api_tier = api_tier
         self._session: aiohttp.ClientSession | None = None
-        self._rate_limited_until = 0.0  # time.monotonic() deadline
+        self._limiter = rate_limiter or build_limiter()
+        self._limiter.add_limit(requests_per_minute(LIMIT_ID, api_tier.rate_limit))
         self._last_prices: dict[str, Decimal] = {}  # last complete fetch
 
     @override
@@ -73,16 +81,15 @@ class CoinGeckoRateSource(RateSourceBase):
 
     async def _request(self, endpoint: str, params: dict | None = None) -> Any:
         session = await self._ensure_session()
-        url = f"{self._api_tier.base_url}{endpoint}"
-        headers = self._get_headers()
-        async with session.get(url, params=params, headers=headers) as resp:
-            if resp.status == 429:
-                raise RateLimitedError(
-                    parse_retry_after(resp.headers.get("Retry-After"), COOLOFF_AFTER_BAN),
-                    "Rate limited by CoinGecko",
-                )
-            resp.raise_for_status()
-            return await resp.json()
+        return await paced_get(
+            self._limiter,
+            LIMIT_ID,
+            session,
+            f"{self._api_tier.base_url}{endpoint}",
+            params=params,
+            headers=self._get_headers(),
+            source="CoinGecko",
+        )
 
     async def _get_prices_page(self, vs_currency: str, page: int) -> list[dict]:
         params = {
@@ -104,22 +111,18 @@ class CoinGeckoRateSource(RateSourceBase):
 
     @override
     async def get_prices(self, quote_token: str | None = None) -> dict[str, Decimal]:
-        if time.monotonic() < self._rate_limited_until:
+        if self._limiter.is_paused(LIMIT_ID):
             logger.debug("CoinGecko rate-limit backoff active, skipping fetch")
             return dict(self._last_prices)
         try:
             prices = await self._fetch_prices(quote_token or "USD")
         except _IncompletePricesError as e:
-            if time.monotonic() < self._rate_limited_until:
+            if self._limiter.is_paused(LIMIT_ID):
                 # Cut short by a 429: keep last known prices for unfetched pairs
                 return {**self._last_prices, **e.partial}
             return e.partial
         self._last_prices = prices
         return prices
-
-    def _enter_backoff(self, error: RateLimitedError) -> None:
-        self._rate_limited_until = time.monotonic() + error.retry_after
-        logger.warning(f"CoinGecko rate limit hit, backing off {error.retry_after:.0f}s")
 
     @async_ttl_cache(ttl=int(COOLOFF_AFTER_BAN), maxsize=1)
     async def _fetch_prices(self, quote_token: str) -> dict[str, Decimal]:
@@ -139,8 +142,7 @@ class CoinGeckoRateSource(RateSourceBase):
                     if symbol and price is not None:
                         pair = combine_trading_pair(symbol, quote_token.upper())
                         results[pair] = Decimal(str(price))
-            except RateLimitedError as e:
-                self._enter_backoff(e)
+            except RateLimitedError:
                 complete = False
                 rate_limited = True
                 break
@@ -159,8 +161,7 @@ class CoinGeckoRateSource(RateSourceBase):
                     if symbol and price is not None:
                         pair = combine_trading_pair(symbol, quote_token.upper())
                         results[pair] = Decimal(str(price))
-            except RateLimitedError as e:
-                self._enter_backoff(e)
+            except RateLimitedError:
                 complete = False
             except Exception as e:
                 logger.warning(f"Error fetching extra token IDs: {e}")
