@@ -1,7 +1,7 @@
 """CoinGecko rate source — standalone HTTP implementation."""
 
-import asyncio
 import logging
+import time
 from decimal import Decimal
 from enum import Enum
 from typing import Any, override
@@ -10,6 +10,7 @@ import aiohttp
 
 from rate_oracle.core.rate_source_base import RateSourceBase
 from rate_oracle.core.utils import async_ttl_cache, combine_trading_pair
+from rate_oracle.sources.rate_limit import RateLimitedError, parse_retry_after
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,8 @@ class CoinGeckoRateSource(RateSourceBase):
         self._api_key = api_key
         self._api_tier = api_tier
         self._session: aiohttp.ClientSession | None = None
+        self._rate_limited_until = 0.0  # time.monotonic() deadline
+        self._last_prices: dict[str, Decimal] = {}  # last complete fetch
 
     @override
     @property
@@ -74,9 +77,10 @@ class CoinGeckoRateSource(RateSourceBase):
         headers = self._get_headers()
         async with session.get(url, params=params, headers=headers) as resp:
             if resp.status == 429:
-                logger.warning(f"CoinGecko rate limit hit, cooling off {COOLOFF_AFTER_BAN}s")
-                await asyncio.sleep(COOLOFF_AFTER_BAN)
-                raise OSError("Rate limited by CoinGecko")
+                raise RateLimitedError(
+                    parse_retry_after(resp.headers.get("Retry-After"), COOLOFF_AFTER_BAN),
+                    "Rate limited by CoinGecko",
+                )
             resp.raise_for_status()
             return await resp.json()
 
@@ -100,10 +104,22 @@ class CoinGeckoRateSource(RateSourceBase):
 
     @override
     async def get_prices(self, quote_token: str | None = None) -> dict[str, Decimal]:
+        if time.monotonic() < self._rate_limited_until:
+            logger.debug("CoinGecko rate-limit backoff active, skipping fetch")
+            return dict(self._last_prices)
         try:
-            return await self._fetch_prices(quote_token or "USD")
+            prices = await self._fetch_prices(quote_token or "USD")
         except _IncompletePricesError as e:
+            if time.monotonic() < self._rate_limited_until:
+                # Cut short by a 429: keep last known prices for unfetched pairs
+                return {**self._last_prices, **e.partial}
             return e.partial
+        self._last_prices = prices
+        return prices
+
+    def _enter_backoff(self, error: RateLimitedError) -> None:
+        self._rate_limited_until = time.monotonic() + error.retry_after
+        logger.warning(f"CoinGecko rate limit hit, backing off {error.retry_after:.0f}s")
 
     @async_ttl_cache(ttl=int(COOLOFF_AFTER_BAN), maxsize=1)
     async def _fetch_prices(self, quote_token: str) -> dict[str, Decimal]:
@@ -111,6 +127,7 @@ class CoinGeckoRateSource(RateSourceBase):
         vs_currency = quote_token.lower()
         results: dict[str, Decimal] = {}
         complete = True
+        rate_limited = False
 
         # Fetch 7 pages of top coins by market cap
         for page in range(1, 8):
@@ -122,13 +139,18 @@ class CoinGeckoRateSource(RateSourceBase):
                     if symbol and price is not None:
                         pair = combine_trading_pair(symbol, quote_token.upper())
                         results[pair] = Decimal(str(price))
+            except RateLimitedError as e:
+                self._enter_backoff(e)
+                complete = False
+                rate_limited = True
+                break
             except Exception as e:
                 logger.warning(f"Error fetching CoinGecko page {page}: {e}")
                 complete = False
                 break
 
-        # Fetch extra token IDs
-        if self._extra_token_ids:
+        # Fetch extra token IDs (skipped once rate limited)
+        if self._extra_token_ids and not rate_limited:
             try:
                 data = await self._get_prices_by_ids(vs_currency, self._extra_token_ids)
                 for coin in data:
@@ -137,6 +159,9 @@ class CoinGeckoRateSource(RateSourceBase):
                     if symbol and price is not None:
                         pair = combine_trading_pair(symbol, quote_token.upper())
                         results[pair] = Decimal(str(price))
+            except RateLimitedError as e:
+                self._enter_backoff(e)
+                complete = False
             except Exception as e:
                 logger.warning(f"Error fetching extra token IDs: {e}")
                 complete = False

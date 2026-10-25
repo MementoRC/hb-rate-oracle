@@ -1,11 +1,16 @@
 """Unit tests for rate_oracle.sources.coin_cap_source.CoinCapRateSource."""
 
+import asyncio
 import logging
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from rate_oracle.sources.coin_cap_source import CoinCapRateSource
+from rate_oracle.sources import coin_cap_source
+from rate_oracle.sources.coin_cap_source import COOLOFF_AFTER_BAN, CoinCapRateSource
+from rate_oracle.sources.rate_limit import RateLimitedError
 
 
 def _make_asset(asset_id: str, symbol: str, price_usd: str) -> dict:
@@ -201,3 +206,114 @@ class TestCoinCapGetPricesEmptyMap:
 
         prices = await source.get_prices(quote_token="USD")
         assert prices == {}
+        assert source._rate_limited_until == 0.0
+
+
+def _make_429_response(retry_after: str | None):
+    resp = AsyncMock()
+    resp.status = 429
+    resp.headers = {"Retry-After": retry_after} if retry_after is not None else {}
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=resp)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
+class TestCoinCapRateLimited:
+    @pytest.mark.asyncio
+    async def test_request_429_raises_without_sleeping(self, monkeypatch):
+        """A 429 raises RateLimitedError carrying Retry-After and never sleeps."""
+        sleep = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep)
+        source = CoinCapRateSource(assets_map={"bitcoin": "BTC"})
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(return_value=_make_429_response("120"))
+        source._session = session
+
+        with pytest.raises(RateLimitedError) as exc_info:
+            await source._request("/assets")
+
+        assert exc_info.value.retry_after == 120.0
+        sleep.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_request_429_without_header_uses_default(self):
+        source = CoinCapRateSource(assets_map={"bitcoin": "BTC"})
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(return_value=_make_429_response(None))
+        source._session = session
+
+        with pytest.raises(RateLimitedError) as exc_info:
+            await source._request("/assets")
+
+        assert exc_info.value.retry_after == COOLOFF_AFTER_BAN
+
+    @pytest.mark.asyncio
+    async def test_backoff_short_circuits_then_resumes(self, monkeypatch, caplog):
+        """After a 429, get_prices makes no requests until the window passes."""
+        clock = [1000.0]
+        monkeypatch.setattr(coin_cap_source, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+        source = CoinCapRateSource(assets_map={"bitcoin": "BTC"})
+        calls = 0
+        limited = True
+
+        async def mock_request(endpoint, params=None):
+            nonlocal calls
+            calls += 1
+            if limited:
+                raise RateLimitedError(120.0)
+            return {"data": [_make_asset("bitcoin", "BTC", "50000.00")]}
+
+        source._request = mock_request
+
+        with caplog.at_level(logging.WARNING, logger="rate_oracle.sources.coin_cap_source"):
+            assert await source.get_prices(quote_token="USD") == {}
+        assert calls == 1
+        assert (
+            sum(
+                "rate limit" in r.message.lower()
+                for r in caplog.records
+                if r.levelno == logging.WARNING
+            )
+            == 1
+        )
+
+        # Inside the window: no request, no further warnings
+        caplog.clear()
+        clock[0] += 119.0
+        with caplog.at_level(logging.WARNING, logger="rate_oracle.sources.coin_cap_source"):
+            assert await source.get_prices(quote_token="USD") == {}
+        assert calls == 1
+        assert not caplog.records
+
+        # After the window: fetches again
+        limited = False
+        clock[0] += 2.0
+        prices = await source.get_prices(quote_token="USD")
+        assert calls == 2
+        assert "BTC-USD" in prices
+
+    @pytest.mark.asyncio
+    async def test_429_and_backoff_return_last_good_prices(self, monkeypatch):
+        """A 429 and the following backoff window keep the last successful prices."""
+        clock = [1000.0]
+        monkeypatch.setattr(coin_cap_source, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+        source = CoinCapRateSource(assets_map={"bitcoin": "BTC"})
+        limited = False
+
+        async def mock_request(endpoint, params=None):
+            if limited:
+                raise RateLimitedError(120.0)
+            return {"data": [_make_asset("bitcoin", "BTC", "50000.00")]}
+
+        source._request = mock_request
+
+        good = await source.get_prices(quote_token="USD")
+        assert good == {"BTC-USD": Decimal("50000.00")}
+
+        limited = True
+        assert await source.get_prices(quote_token="USD") == good
+        clock[0] += 60.0
+        assert await source.get_prices(quote_token="USD") == good
