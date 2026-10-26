@@ -117,10 +117,8 @@ class CoinGeckoRateSource(RateSourceBase):
         try:
             prices = await self._fetch_prices(quote_token or "USD")
         except _IncompletePricesError as e:
-            if self._limiter.is_paused(LIMIT_ID):
-                # Cut short by a 429: keep last known prices for unfetched pairs
-                return {**self._last_prices, **e.partial}
-            return e.partial
+            # Any failure (429, 5xx, timeout, ...): keep last known prices for unfetched pairs
+            return {**self._last_prices, **e.partial}
         self._last_prices = prices
         return prices
 
