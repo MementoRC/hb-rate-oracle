@@ -486,7 +486,7 @@ class TestCoinGeckoLastGoodPrices:
         for page in range(3, 8):
             assert merged[f"C{page}-USD"] == good[f"C{page}-USD"]
         assert len(merged) == 7
-        assert source._last_prices == good
+        assert source._last_prices["USD"] == good
 
     async def test_extra_ids_error_merges_over_last_good(self):
         source = CoinGeckoRateSource(extra_token_ids=["pepe"])
@@ -530,6 +530,84 @@ class TestCoinGeckoLastGoodPrices:
         source._fetch_prices.cache_clear()
         fail_page = 1
         assert await source.get_prices(quote_token="USD") == {}
+
+
+class TestCoinGeckoLastGoodPerQuote:
+    async def test_other_quote_failure_does_not_merge_usd(self):
+        source = CoinGeckoRateSource()
+        source._fetch_prices.cache_clear()
+        fail = False
+
+        async def mock_get_page(vs_currency, page):
+            if fail and page == 2:
+                raise OSError("network error")
+            return [_make_coin(f"c{page}", float(page))]
+
+        source._get_prices_page = mock_get_page
+        assert len(await source.get_prices(quote_token="USD")) == 7
+
+        source._fetch_prices.cache_clear()
+        fail = True
+        assert await source.get_prices(quote_token="EUR") == {"C1-EUR": Decimal("1.0")}
+
+    async def test_other_quote_backoff_returns_empty(self):
+        source, _ = _make_paced_source(api_tier=CoinGeckoAPITier.PRO)
+        source._session = _make_paged_session(rate_limited_page=None)
+        good = await source.get_prices(quote_token="USD")
+        assert len(good) == 7
+
+        source._fetch_prices.cache_clear()
+        source._session = _make_paged_session(rate_limited_page="2")
+        await source.get_prices(quote_token="USD")  # 429 pauses the limiter
+
+        assert await source.get_prices(quote_token="EUR") == {}
+        assert await source.get_prices(quote_token="USD") == good
+
+    async def test_failure_merges_only_own_quote_snapshot(self):
+        source = CoinGeckoRateSource()
+        source._fetch_prices.cache_clear()
+        scale = 1.0
+        fail = False
+
+        async def mock_get_page(vs_currency, page):
+            if fail and page == 3:
+                raise OSError("network error")
+            return [_make_coin(f"c{page}", float(page) * scale)]
+
+        source._get_prices_page = mock_get_page
+        usd = await source.get_prices(quote_token="USD")
+        source._fetch_prices.cache_clear()
+        scale = 2.0
+        eur = await source.get_prices(quote_token="EUR")
+        assert eur["C1-EUR"] == Decimal("2.0")
+
+        source._fetch_prices.cache_clear()
+        scale = 10.0
+        fail = True
+        merged = await source.get_prices(quote_token="USD")
+        assert all(k.endswith("-USD") for k in merged)
+        assert len(merged) == 7
+        for page in range(3, 8):
+            assert merged[f"C{page}-USD"] == usd[f"C{page}-USD"]
+        assert source._last_prices["EUR"] == eur
+
+    async def test_quote_case_is_normalized(self):
+        source = CoinGeckoRateSource()
+        source._fetch_prices.cache_clear()
+        fail = False
+
+        async def mock_get_page(vs_currency, page):
+            if fail and page == 1:
+                raise OSError("network error")
+            return [_make_coin(f"c{page}", float(page))]
+
+        source._get_prices_page = mock_get_page
+        good = await source.get_prices(quote_token="usd")
+
+        source._fetch_prices.cache_clear()
+        fail = True
+        assert await source.get_prices(quote_token="USD") == good
+        assert list(source._last_prices) == ["USD"]
 
 
 class TestCoinGeckoPacing:

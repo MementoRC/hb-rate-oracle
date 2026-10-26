@@ -62,7 +62,8 @@ class CoinGeckoRateSource(RateSourceBase):
         self._session: aiohttp.ClientSession | None = None
         self._limiter = rate_limiter or build_limiter()
         self._limiter.add_limit(requests_per_minute(LIMIT_ID, api_tier.rate_limit))
-        self._last_prices: dict[str, Decimal] = {}  # last complete fetch
+        # last complete fetch, per quote token
+        self._last_prices: dict[str, dict[str, Decimal]] = {}
 
     @override
     @property
@@ -111,15 +112,17 @@ class CoinGeckoRateSource(RateSourceBase):
 
     @override
     async def get_prices(self, quote_token: str | None = None) -> dict[str, Decimal]:
+        quote = (quote_token or "USD").upper()
+        last_good = self._last_prices.get(quote, {})
         if self._limiter.is_paused(LIMIT_ID):
             logger.debug("CoinGecko rate-limit backoff active, skipping fetch")
-            return dict(self._last_prices)
+            return dict(last_good)
         try:
-            prices = await self._fetch_prices(quote_token or "USD")
+            prices = await self._fetch_prices(quote)
         except _IncompletePricesError as e:
             # Any failure (429, 5xx, timeout, ...): keep last known prices for unfetched pairs
-            return {**self._last_prices, **e.partial}
-        self._last_prices = prices
+            return {**last_good, **e.partial}
+        self._last_prices[quote] = prices
         return prices
 
     @async_ttl_cache(ttl=int(COOLOFF_AFTER_BAN), maxsize=1)
