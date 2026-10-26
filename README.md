@@ -11,7 +11,7 @@ A modular rate oracle for cryptocurrency price conversion, designed as a drop-in
 | Source | Description | API Key Required |
 |--------|-------------|-----------------|
 | **CoinGecko** | Broad market coverage, free tier available | Optional (Pro) |
-| **CoinCap** | Real-time price data | No |
+| **CoinCap** | Price data via CoinCap v3 (free plan: 5 requests/min, results cached 30s) | Yes |
 
 ## Installation
 
@@ -57,7 +57,9 @@ from rate_oracle import RateOracle
 from rate_oracle.sources.coin_cap_source import CoinCapRateSource
 
 async def main():
-    source = CoinCapRateSource()
+    # CoinCap v3 requires an API key; without one no prices are fetched.
+    # Pass requests_per_minute=... if your plan allows more than the free 5/min.
+    source = CoinCapRateSource(api_key="YOUR_COINCAP_KEY")
     oracle = RateOracle(source=source)
     await oracle.start()
 

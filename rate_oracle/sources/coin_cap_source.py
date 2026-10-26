@@ -1,11 +1,12 @@
-"""CoinCap rate source — standalone HTTP + WebSocket implementation."""
+"""CoinCap rate source — standalone HTTP implementation (v3 REST API)."""
 
 import logging
+import time
 from decimal import Decimal
 from typing import Any, override
 
 import aiohttp
-from rate_limit import RateLimiter
+from rate_limit import Clock, RateLimiter
 
 from rate_oracle.core.rate_source_base import RateSourceBase
 from rate_oracle.core.utils import combine_trading_pair
@@ -13,37 +14,51 @@ from rate_oracle.sources.rate_limit import (
     RateLimitedError,
     build_limiter,
     paced_get,
-    requests_per_minute,
 )
+from rate_oracle.sources.rate_limit import requests_per_minute as _requests_per_minute
 
 logger = logging.getLogger(__name__)
 
 LIMIT_ID = "coin_cap"
-# CoinCap's published unauthenticated allowance is 200 requests/minute (recalled from its docs,
-# not re-verified); kept for keyed use too, as the conservative choice.
-REQUESTS_PER_MINUTE = 200
+# CoinCap v3 free plan: `X-RateLimit-Limit: 5` per ~sliding 60s (verified against live responses
+# 2026-10-26). Paid plans allow more; pass `requests_per_minute` to match.
+FREE_TIER_REQUESTS_PER_MINUTE = 5
+# Server-side `cache-control: max-age=30`; no point refetching sooner.
+SERVER_CACHE_SECONDS = 30.0
 
-BASE_REST_URL = "https://api.coincap.io/v2"
-BASE_WS_URL = "wss://ws.coincap.io/prices?assets="
+BASE_REST_URL = "https://rest.coincap.io/v3"
 ALL_ASSETS_ENDPOINT = "/assets"
 
 
 class CoinCapRateSource(RateSourceBase):
-    """Fetches prices from CoinCap API."""
+    """Fetches prices from the CoinCap v3 REST API (an API key is required)."""
 
     def __init__(
         self,
         assets_map: dict[str, str] | None = None,
         api_key: str = "",
         rate_limiter: RateLimiter | None = None,
+        requests_per_minute: int = FREE_TIER_REQUESTS_PER_MINUTE,
+        cache_ttl: float | None = None,
+        clock: Clock = time.monotonic,
     ):
+        if requests_per_minute < 1:
+            raise ValueError(f"requests_per_minute must be >= 1, got {requests_per_minute}")
         self._assets_map = assets_map or {}
         self._api_key = api_key
         self._prices: dict[str, Decimal] = {}
         self._session: aiohttp.ClientSession | None = None
         self._limiter = rate_limiter or build_limiter()
-        self._limiter.add_limit(requests_per_minute(LIMIT_ID, REQUESTS_PER_MINUTE))
+        self._limiter.add_limit(_requests_per_minute(LIMIT_ID, requests_per_minute))
         self._last_prices: dict[str, Decimal] = {}  # last successful fetch
+        self._cache_ttl = (
+            cache_ttl
+            if cache_ttl is not None
+            else max(SERVER_CACHE_SECONDS, 60.0 / requests_per_minute)
+        )
+        self._clock = clock
+        self._fetched_at: float | None = None
+        self._warned_no_key = False
 
     @override
     @property
@@ -81,6 +96,15 @@ class CoinCapRateSource(RateSourceBase):
         if not self._assets_map:
             return {}
 
+        if not self._api_key:
+            if not self._warned_no_key:
+                self._warned_no_key = True
+                logger.warning("CoinCap v3 requires an API key; no CoinCap prices will be fetched.")
+            return {}
+
+        if self._fetched_at is not None and self._clock() - self._fetched_at < self._cache_ttl:
+            return dict(self._last_prices)
+
         if self._limiter.is_paused(LIMIT_ID):
             logger.debug("CoinCap rate-limit backoff active, skipping fetch")
             return dict(self._last_prices)
@@ -97,12 +121,13 @@ class CoinCapRateSource(RateSourceBase):
                     pair = combine_trading_pair(symbol.upper(), "USD")
                     results[pair] = Decimal(str(price))
             self._last_prices = results
+            self._fetched_at = self._clock()
             return results
         except RateLimitedError:
             return dict(self._last_prices)
         except Exception as e:
             logger.error(f"Error fetching CoinCap prices: {e}")
-            return {}
+            return dict(self._last_prices)
 
     async def close(self):
         if self._session and not self._session.closed:
