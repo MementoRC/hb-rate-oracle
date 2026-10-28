@@ -5,6 +5,7 @@ __pycache__/
 dist/
 build/
 .pixi/
+pixi.lock
 *.so
 .mypy_cache/
 .pytest_cache/
