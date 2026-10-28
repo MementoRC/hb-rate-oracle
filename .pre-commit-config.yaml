@@ -1,13 +1,13 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.6
+    rev: v0.15.10
     hooks:
       - id: ruff
-        args: [ --fix ]
+        args: [--fix]
       - id: ruff-format
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: v5.0.0
     hooks:
       - id: check-yaml
       - id: end-of-file-fixer
@@ -20,19 +20,16 @@ repos:
       - id: check-merge-conflict
       - id: check-toml
 
-  # Temporarily disable mypy in pre-commit during infrastructure setup
-  # - repo: https://github.com/pre-commit/mirrors-mypy
-  #   rev: v1.6.1
-  #   hooks:
-  #     - id: mypy
-  #       additional_dependencies: [types-requests, types-setuptools]
-  #       exclude: ^(tests/.*)
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.20.0
+    hooks:
+      - id: mypy
+        additional_dependencies: [types-cachetools]
+        exclude: ^(tests/|.*mocking_resources/.*)
 
-  # Temporarily disable detect-secrets during initial setup
-  # TODO: Re-enable after fixing baseline configuration
-  # - repo: https://github.com/Yelp/detect-secrets
-  #   rev: v1.4.0
-  #   hooks:
-  #     - id: detect-secrets
-  #       args: ['--baseline', '.secrets.baseline']
-  #       exclude: package-lock.json
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: package-lock.json
