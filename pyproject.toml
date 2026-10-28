@@ -95,7 +95,7 @@ format-check = "ruff format --check rate_oracle tests"
 typecheck = "mypy rate_oracle"
 type-check = "mypy rate_oracle"
 security = "bandit -c pyproject.toml -r rate_oracle/"
-quality = { depends-on = ["lint", "type-check"] }
+quality = { depends-on = ["lint", "format-check", "typecheck"] }
 check = { depends-on = ["format", "lint", "type-check", "test"] }
 
 [tool.ruff]
