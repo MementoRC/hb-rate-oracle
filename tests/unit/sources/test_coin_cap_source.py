@@ -243,7 +243,7 @@ def _make_paced_source(
     limiter = build_limiter(clock=clock, sleep=clock.sleep)
     source = CoinCapRateSource(
         assets_map=assets_map or {"bitcoin": "BTC"},
-        api_key="key",
+        api_key="key",  # pragma: allowlist secret
         rate_limiter=limiter,
         clock=clock,
     )
@@ -415,10 +415,11 @@ class TestCoinCapCaching:
     @pytest.mark.parametrize("rpm", [0, -1])
     def test_requests_per_minute_must_be_positive(self, rpm):
         with pytest.raises(ValueError, match="requests_per_minute"):
-            CoinCapRateSource(api_key="key", requests_per_minute=rpm)
+            CoinCapRateSource(api_key="key", requests_per_minute=rpm)  # pragma: allowlist secret
 
     def test_explicit_ttl(self):
-        assert CoinCapRateSource(api_key="key", cache_ttl=5.0)._cache_ttl == 5.0
+        source = CoinCapRateSource(api_key="key", cache_ttl=5.0)  # pragma: allowlist secret
+        assert source._cache_ttl == 5.0
 
     @pytest.mark.asyncio
     async def test_limiter_sized_from_requests_per_minute(self):
