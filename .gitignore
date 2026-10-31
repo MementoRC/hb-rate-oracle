@@ -4,8 +4,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# Pixi (pixi.lock is committed: CI installs --locked and check-conda-first gates it)
 .pixi/
-pixi.lock
 *.so
 .mypy_cache/
 .pytest_cache/
