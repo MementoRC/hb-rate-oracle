@@ -180,14 +180,18 @@ class TestUpdatePrices:
         assert oracle._prices == {}
 
     @pytest.mark.asyncio
-    async def test_update_prices_replaces_old_prices(self):
+    async def test_update_prices_merges_into_old_prices(self):
         oracle = RateOracle()
-        oracle._prices = {"BTC-USD": Decimal("40000")}
+        oracle._prices = {"BTC-USD": Decimal("40000"), "XRP-USD": Decimal("1")}
         new_prices = {"BTC-USD": Decimal("50000"), "ETH-USD": Decimal("3000")}
         source = _make_mock_source(new_prices)
         oracle._source = source
         await oracle._update_prices()
-        assert oracle._prices == new_prices
+        assert oracle._prices == {
+            "BTC-USD": Decimal("50000"),
+            "ETH-USD": Decimal("3000"),
+            "XRP-USD": Decimal("1"),
+        }
 
     @pytest.mark.asyncio
     async def test_update_prices_passes_custom_quote_token(self):
