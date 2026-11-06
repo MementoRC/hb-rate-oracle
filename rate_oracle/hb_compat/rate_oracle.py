@@ -32,6 +32,23 @@ class RateOracle(RateOracleCore):
         rate = super().get_pair_rate(pair)
         return None if rate == Decimal("0") else rate
 
+    async def rate_async(self, pair: str) -> Decimal | None:  # type: ignore[override]
+        rate = await super().rate_async(pair)
+        return None if rate == Decimal("0") else rate
+
+    async def stored_or_live_rate(self, pair: str) -> Decimal | None:  # type: ignore[override]
+        if self._prices:
+            return self.get_pair_rate(pair)
+        return await self.rate_async(pair)
+
+    async def get_rate(self, base_token: str) -> Decimal | None:  # type: ignore[override]
+        rate = await super().get_rate(base_token)
+        return None if rate == Decimal("0") else rate
+
+    async def get_value(self, amount: Decimal, base_token: str) -> Decimal:
+        rate = await self.get_rate(base_token)
+        return amount * (rate or Decimal("0"))
+
     async def start_network(self) -> None:
         await super().start()
 

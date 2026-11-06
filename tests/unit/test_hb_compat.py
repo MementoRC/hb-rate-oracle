@@ -4,8 +4,10 @@ from decimal import Decimal
 
 import pytest
 
+import rate_oracle
 import rate_oracle.hb_compat as hb_compat
 from rate_oracle.core.rate_oracle import RateOracle as CoreRateOracle
+from rate_oracle.core.utils import find_rate as core_find_rate
 from rate_oracle.hb_compat.rate_oracle import RateOracle
 
 
@@ -46,6 +48,65 @@ async def test_start_stop_network():
     await oracle.stop_network()
     assert oracle._started is False
     assert oracle._update_task is None
+
+
+class _FakeSource:
+    name = "fake"
+
+    def __init__(self, prices: dict[str, Decimal]):
+        self._prices = prices
+
+    async def get_prices(self, quote_token: str = "USD") -> dict[str, Decimal]:
+        return dict(self._prices)
+
+
+def test_find_rate_none_on_miss_value_on_hit_and_reverse():
+    prices = {"BTC-USD": Decimal("4")}
+    assert hb_compat.find_rate(prices, "ETH-USD") is None
+    assert hb_compat.find_rate(prices, "BTC-USD") == Decimal("4")
+    assert hb_compat.find_rate(prices, "USD-BTC") == Decimal("0.25")
+
+
+def test_find_rate_identity_hb_compat_vs_core():
+    assert hb_compat.find_rate is not rate_oracle.find_rate
+    assert rate_oracle.find_rate is core_find_rate
+
+
+async def test_get_rate_keyword_none_on_miss_decimal_on_hit():
+    oracle = RateOracle(source=_FakeSource({"BTC-USD": Decimal("7")}))
+    assert await oracle.get_rate(base_token="BTC") == Decimal("7")
+    assert await oracle.get_rate("BTC") == Decimal("7")
+    assert await oracle.get_rate(base_token="XYZ") is None
+
+
+async def test_rate_async_none_on_miss():
+    oracle = RateOracle(source=_FakeSource({"BTC-USD": Decimal("7")}))
+    assert await oracle.rate_async("BTC-USD") == Decimal("7")
+    assert await oracle.rate_async("XYZ-USD") is None
+    assert await RateOracle().rate_async("BTC-USD") is None
+
+
+async def test_get_value_zero_on_miss_and_product_on_hit():
+    oracle = RateOracle(source=_FakeSource({"BTC-USD": Decimal("7")}))
+    assert await oracle.get_value(Decimal("2"), "BTC") == Decimal("14")
+    assert await oracle.get_value(Decimal("2"), "XYZ") == Decimal("0")
+
+
+async def test_stored_or_live_rate_none_on_miss_both_branches():
+    live = RateOracle(source=_FakeSource({"BTC-USD": Decimal("7")}))
+    assert await live.stored_or_live_rate("XYZ-USD") is None
+    assert await live.stored_or_live_rate("BTC-USD") == Decimal("7")
+
+    cached = RateOracle()
+    cached.set_price("BTC-USD", Decimal("5"))
+    assert await cached.stored_or_live_rate("XYZ-USD") is None
+    assert await cached.stored_or_live_rate("BTC-USD") == Decimal("5")
+
+
+def test_source_public_accessor():
+    source = _FakeSource({})
+    assert RateOracle(source=source).source is source
+    assert RateOracle().source is None
 
 
 def test_exports():
