@@ -1,8 +1,7 @@
 """Tests for rate_oracle.hb_compat RateOracle surface."""
 
+import asyncio
 from decimal import Decimal
-
-import pytest
 
 import rate_oracle
 import rate_oracle.hb_compat as hb_compat
@@ -27,11 +26,21 @@ async def test_sync_start_creates_task_and_stop_cancels():
     assert task.cancelled()
 
 
-def test_start_outside_loop_raises():
-    oracle = RateOracle()
-    with pytest.raises(RuntimeError, match="running event loop"):
+def test_start_outside_loop_schedules_on_current_loop():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        oracle = RateOracle()
         oracle.start()
-    assert oracle._started is False
+        assert oracle._started is True
+        assert oracle._start_task is not None
+        loop.run_until_complete(asyncio.sleep(0))
+        assert oracle._update_task is not None
+        loop.run_until_complete(oracle.stop_network())
+        assert oracle._update_task is None
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
 
 
 def test_get_pair_rate_none_on_miss_and_decimal_on_hit():

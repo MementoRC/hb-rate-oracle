@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import warnings
 from collections.abc import Callable
 from decimal import Decimal
 from typing import Any, ClassVar
@@ -16,6 +17,19 @@ __all__ = ["RATE_ORACLE_SOURCES", "RateOracle"]
 logger = logging.getLogger(__name__)
 
 _ZERO = Decimal("0")
+
+
+def _current_loop() -> asyncio.AbstractEventLoop:
+    """Running loop if any, else the policy loop (in-tree ``ensure_future`` parity).
+
+    The scheduled task runs when the caller later runs that loop.
+    """
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return asyncio.get_event_loop()
 
 
 class RateOracle(RateOracleCore):
@@ -77,12 +91,7 @@ class RateOracle(RateOracleCore):
 
     # In-tree NetworkBase API is sync, hence the override ignores below.
     def start(self) -> None:  # type: ignore[override]
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError as e:
-            raise RuntimeError(
-                "RateOracle.start() must be called from within a running event loop"
-            ) from e
+        loop = _current_loop()
         self._started = True
         if self._start_task is not None:
             self._start_task.cancel()

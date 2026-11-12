@@ -134,9 +134,40 @@ async def test_start_is_sync_and_returns_none():
     assert oracle._fetch_price_task is None
 
 
-def test_start_without_loop_raises():
-    with pytest.raises(RuntimeError, match="running event loop"):
-        RateOracle().start()
+def test_start_without_running_loop_then_drive_loop():
+    """Upstream test_rate_oracle_network flow: sync start(), then the caller runs the loop."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        oracle = RateOracle(source=DummyRateSource({"SOMETOKEN-USD": Decimal("100")}))
+        oracle.start()
+        loop.run_until_complete(asyncio.wait_for(oracle.get_ready(), 2))
+        assert oracle.prices
+        assert oracle.get_pair_rate("SOMETOKEN-USD") == Decimal("100")
+        loop.run_until_complete(oracle.stop_network())
+        assert oracle._fetch_price_task is None
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
+def test_stop_without_running_loop_after_start():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        oracle = RateOracle(source=DummyRateSource({"A-USD": Decimal("1")}))
+        oracle.start()
+        start_task = oracle._start_task
+        assert start_task is not None
+        oracle.stop()
+        assert oracle._start_task is None
+        assert oracle._fetch_price_task is None
+        loop.run_until_complete(asyncio.sleep(0))
+        assert start_task.cancelled()
+        assert oracle._fetch_price_task is None
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
 
 
 async def test_start_network_after_start_restarts_fetching():
