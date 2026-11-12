@@ -31,6 +31,7 @@ RATE_ORACLE_SOURCES: dict[str, type[RateSourceProtocol]] = {
 def _conforms(source_cls: object) -> bool:
     return (
         isinstance(source_cls, type)
+        and not inspect.isabstract(source_cls)
         and hasattr(source_cls, "name")
         and inspect.iscoroutinefunction(getattr(source_cls, "get_prices", None))
     )

@@ -60,10 +60,11 @@ class _FakeSource:
 
 
 def test_find_rate_none_on_miss_value_on_hit_and_reverse():
-    prices = {"BTC-USD": Decimal("4")}
-    assert hb_compat.find_rate(prices, "ETH-USD") is None
-    assert hb_compat.find_rate(prices, "BTC-USD") == Decimal("4")
-    assert hb_compat.find_rate(prices, "USD-BTC") == Decimal("0.25")
+    # In-tree find_rate normalizes USD to USDT, so the reverse case uses a non-USD quote.
+    prices = {"BTC-EUR": Decimal("4")}
+    assert hb_compat.find_rate(prices, "ETH-EUR") is None
+    assert hb_compat.find_rate(prices, "BTC-EUR") == Decimal("4")
+    assert hb_compat.find_rate(prices, "EUR-BTC") == Decimal("0.25")
 
 
 def test_find_rate_identity_hb_compat_vs_core():

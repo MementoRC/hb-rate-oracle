@@ -3,12 +3,14 @@
 import asyncio
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from rate_oracle.core.rate_source_base import RateSourceBase
 from rate_oracle.core.registry import RATE_ORACLE_SOURCES, register_source
-from rate_oracle.hb_compat import RateOracle, RateSourceProtocol
+from rate_oracle.hb_compat import RateOracle, RateSourceProtocol, find_rate
+from rate_oracle.hb_compat import utils as compat_utils
 
 MID = object()
 
@@ -330,6 +332,127 @@ def test_registry_rejects_non_conforming(bad):
     with pytest.raises(TypeError):
         register_source("bad_test", bad)  # type: ignore[arg-type]
     assert "bad_test" not in RATE_ORACLE_SOURCES
+
+
+def test_registry_rejects_abstract_class():
+    class Abstract(RateSourceBase):
+        pass
+
+    with pytest.raises(TypeError):
+        register_source("abstract_test", Abstract)  # type: ignore[arg-type]
+    assert "abstract_test" not in RATE_ORACLE_SOURCES
+
+
+# --- alias exports ------------------------------------------------------------------
+
+
+def test_rate_oracle_module_reexports():
+    from rate_oracle.hb_compat import rate_oracle as module
+
+    assert module.RATE_ORACLE_SOURCES is RATE_ORACLE_SOURCES
+    assert module.RateOracle is RateOracle
+
+
+# --- find_rate (ported from upstream) -----------------------------------------------
+
+
+def test_find_rate():
+    prices = {"HBOT-USDT": Decimal("100"), "AAVE-USDT": Decimal("50"), "USDT-GBP": Decimal("0.75")}
+    assert find_rate(prices, "HBOT-USDT") == Decimal("100")
+    assert find_rate(prices, "ZBOT-USDT") is None
+    assert find_rate(prices, "USDT-HBOT") == Decimal("0.01")
+    assert find_rate(prices, "HBOT-AAVE") == Decimal("2")
+    assert find_rate(prices, "AAVE-HBOT") == Decimal("0.5")
+    assert find_rate(prices, "HBOT-GBP") == Decimal("75")
+
+
+def test_find_rate_unwraps_usd_quote_to_usdt():
+    prices = {"HYPE-USDT": Decimal("60"), "SOL-USDT": Decimal("70")}
+    assert find_rate(prices, "HYPE-USD") == Decimal("60")
+    assert find_rate(prices, "SOL-USD") == Decimal("70")
+    assert find_rate(prices, "USD-USDT") == Decimal("1")
+    assert find_rate(prices, "USDT-USD") == Decimal("1")
+
+
+def test_find_rate_usd_equivalence_is_a_fallback_not_an_override():
+    assert find_rate({"USDT-USD": Decimal("0.999")}, "USDT-USD") == Decimal("0.999")
+    with patch.object(compat_utils, "USD_EQUIVALENT_TOKENS", []):
+        assert find_rate({"USDT-USD": Decimal("0.999")}, "USDT-USD") == Decimal("0.999")
+    prices = {"HYPE-USDT": Decimal("60")}
+    with patch.object(compat_utils, "USD_EQUIVALENT_TOKENS", []):
+        assert find_rate(prices, "HYPE-USD") is None
+        assert find_rate(prices, "USD-USDT") is None
+        assert find_rate(prices, "USDT-USD") is None
+
+
+def test_find_rate_skips_zero_prices():
+    assert find_rate({"SOL-FARTCOIN": Decimal("0")}, "FARTCOIN-SOL") is None
+    zero_common = {"HBOT-USDT": Decimal("100"), "GBP-USDT": Decimal("0")}
+    assert find_rate(zero_common, "HBOT-GBP") is None
+    assert find_rate({"FARTCOIN-SOL": Decimal("0")}, "FARTCOIN-SOL") == Decimal("0")
+
+
+def test_find_rate_no_lowercase_w_unwrap():
+    assert find_rate({"ETH-USDT": Decimal("2")}, "wETH-USDT") is None
+
+
+# --- live get_rate / rate_async / lifecycle fixes -----------------------------------
+
+
+async def test_get_rate_is_live_without_side_effects():
+    source = DummyRateSource({"BTC-USD": Decimal("7")})
+    oracle = RateOracle(source=source)
+    assert await oracle.get_rate(base_token="BTC") == Decimal("7")
+    assert source.calls == 1
+    assert oracle.prices == {}
+    assert not oracle._ready_event.is_set()
+    source.price_dict["BTC-USD"] = Decimal("8")
+    assert await oracle.get_rate("BTC") == Decimal("8")
+    assert await oracle.get_rate("XYZ") is None
+
+
+async def test_direct_zero_returned_as_is():
+    oracle = RateOracle(source=DummyRateSource({"BTC-USD": Decimal("0")}))
+    assert await oracle.get_rate("BTC") == Decimal("0")
+    assert await oracle.rate_async("BTC-USD") == Decimal("0")
+    assert await oracle.get_value(Decimal("2"), "BTC") == Decimal("0")
+
+
+async def test_double_start_leaves_single_fetch_task():
+    oracle = RateOracle(source=DummyRateSource({"A-USD": Decimal("1")}))
+    oracle.start()
+    oracle.start()
+    await asyncio.sleep(0.05)
+    live = [
+        t for t in asyncio.all_tasks() if "_fetch_price_loop" in repr(t.get_coro()) and not t.done()
+    ]
+    assert len(live) == 1
+    assert oracle._fetch_price_task is live[0]
+    oracle.stop()
+
+
+async def test_back_to_back_start_network_single_task():
+    oracle = RateOracle(source=DummyRateSource())
+    await asyncio.gather(oracle.start_network(), oracle.start_network())
+    await asyncio.sleep(0)
+    live = [
+        t for t in asyncio.all_tasks() if "_fetch_price_loop" in repr(t.get_coro()) and not t.done()
+    ]
+    assert len(live) == 1
+    await oracle.stop_network()
+
+
+async def test_start_after_lone_stop_network_restarts():
+    oracle = RateOracle(source=DummyRateSource())
+    oracle.start()
+    await asyncio.sleep(0)
+    await oracle.stop_network()
+    assert oracle._fetch_price_task is None
+    oracle.start()
+    await asyncio.sleep(0)
+    assert oracle._fetch_price_task is not None
+    assert oracle._started is True
+    oracle.stop()
 
 
 def test_protocol_exported_and_runtime_checkable():

@@ -7,8 +7,11 @@ from decimal import Decimal
 from typing import Any, ClassVar
 
 from rate_oracle.core.rate_oracle import RateOracle as RateOracleCore
+from rate_oracle.core.registry import RATE_ORACLE_SOURCES
 from rate_oracle.core.utils import combine_trading_pair, split_trading_pair
-from rate_oracle.core.utils import find_rate as _core_find_rate
+from rate_oracle.hb_compat.utils import find_rate
+
+__all__ = ["RATE_ORACLE_SOURCES", "RateOracle"]
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +77,6 @@ class RateOracle(RateOracleCore):
 
     # In-tree NetworkBase API is sync, hence the override ignores below.
     def start(self) -> None:  # type: ignore[override]
-        if self._started:
-            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError as e:
@@ -83,6 +84,8 @@ class RateOracle(RateOracleCore):
                 "RateOracle.start() must be called from within a running event loop"
             ) from e
         self._started = True
+        if self._start_task is not None:
+            self._start_task.cancel()
         self._start_task = loop.create_task(self.start_network())
 
     def stop(self) -> None:  # type: ignore[override]
@@ -143,21 +146,23 @@ class RateOracle(RateOracleCore):
         return None
 
     def get_pair_rate(self, pair: str) -> Decimal | None:  # type: ignore[override]
-        rate = _core_find_rate(self._prices, pair)
-        if rate > _ZERO:
+        rate = find_rate(self._prices, pair)
+        if rate is not None and rate > _ZERO:
             return rate
         connector_rate = self._get_rate_from_connectors(pair)
         if connector_rate is not None:
             return connector_rate
         base, quote = split_trading_pair(pair)
-        reverse_rate = _core_find_rate(self._prices, combine_trading_pair(quote, base))
-        if reverse_rate > _ZERO:
+        reverse_rate = find_rate(self._prices, combine_trading_pair(quote, base))
+        if reverse_rate is not None and reverse_rate > _ZERO:
             return Decimal("1") / reverse_rate
         return None
 
     async def rate_async(self, pair: str) -> Decimal | None:  # type: ignore[override]
-        rate = await super().rate_async(pair)
-        return None if rate == _ZERO else rate
+        if self._source is None:
+            return None
+        prices = await self._source.get_prices(quote_token=self._quote_token)
+        return find_rate(prices, pair)
 
     async def stored_or_live_rate(self, pair: str) -> Decimal | None:  # type: ignore[override]
         if self._prices:
@@ -165,8 +170,10 @@ class RateOracle(RateOracleCore):
         return await self.rate_async(pair)
 
     async def get_rate(self, base_token: str) -> Decimal | None:  # type: ignore[override]
-        rate = await super().get_rate(base_token)
-        return None if rate == _ZERO else rate
+        if self._source is None:
+            return None
+        prices = await self._source.get_prices(quote_token=self._quote_token)
+        return find_rate(prices, combine_trading_pair(base_token, self._quote_token))
 
     async def get_value(self, amount: Decimal, base_token: str) -> Decimal:
         rate = await self.get_rate(base_token)
