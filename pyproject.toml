@@ -45,12 +45,14 @@ pytest-timeout = ">=2.1.0"
 pytest-xdist = "*"
 ruff = "=0.17.2"
 mypy = ">=1.20.0"
+import-linter = ">=2.0"
 pre-commit = ">=2.15.0"
 types-cachetools = "*"
 
 [tool.pixi.feature.ci.dependencies]
 ruff = "=0.17.2"
 mypy = ">=1.20.0"
+import-linter = ">=2.0"
 pytest = ">=7.0.0"
 pytest-asyncio = ">=0.21.0"
 pytest-cov = ">=4.1.0"
@@ -97,7 +99,8 @@ typecheck = "mypy rate_oracle"
 type-check = "mypy rate_oracle"
 security = "bandit -c pyproject.toml -r rate_oracle/"
 check-conda-first = "python scripts/check_conda_first.py"
-quality = { depends-on = ["check-conda-first", "lint", "format-check", "typecheck"] }
+lint-boundaries = "lint-imports"
+quality = { depends-on = ["check-conda-first", "lint", "format-check", "typecheck", "lint-boundaries"] }
 check = { depends-on = ["check-conda-first", "format", "lint", "typecheck", "test"] }
 
 [tool.ruff]
@@ -127,6 +130,16 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["rate_oracle"]
+
+[tool.importlinter]
+root_package = "rate_oracle"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "rate_oracle never imports hummingbot (ADR 0001)"
+type = "forbidden"
+source_modules = ["rate_oracle"]
+forbidden_modules = ["hummingbot"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
