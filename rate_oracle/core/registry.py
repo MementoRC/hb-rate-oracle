@@ -4,20 +4,49 @@ Name -> class mapping used by client config to validate/select ``source``.
 The core registers its in-tree exchange sources via ``register_source``.
 """
 
-from rate_oracle.core.rate_source_base import RateSourceBase
+import inspect
+from decimal import Decimal
+from typing import Protocol, runtime_checkable
+
 from rate_oracle.sources.coin_cap_source import CoinCapRateSource
 from rate_oracle.sources.coin_gecko_source import CoinGeckoRateSource
 
-RATE_ORACLE_SOURCES: dict[str, type[RateSourceBase]] = {
+
+@runtime_checkable
+class RateSourceProtocol(Protocol):
+    """Structural type of a rate source: a ``name`` and an async ``get_prices``."""
+
+    @property
+    def name(self) -> str: ...
+
+    async def get_prices(self, quote_token: str | None = None) -> dict[str, Decimal]: ...
+
+
+RATE_ORACLE_SOURCES: dict[str, type[RateSourceProtocol]] = {
     "coin_gecko": CoinGeckoRateSource,
     "coin_cap": CoinCapRateSource,
 }
 
 
-def register_source(name: str, source_cls: type[RateSourceBase], *, replace: bool = False) -> None:
-    """Register a rate source class under ``name``."""
-    if not (isinstance(source_cls, type) and issubclass(source_cls, RateSourceBase)):
-        raise TypeError(f"{source_cls!r} is not a RateSourceBase subclass")
+def _conforms(source_cls: object) -> bool:
+    return (
+        isinstance(source_cls, type)
+        and not inspect.isabstract(source_cls)
+        and hasattr(source_cls, "name")
+        and inspect.iscoroutinefunction(getattr(source_cls, "get_prices", None))
+    )
+
+
+def register_source(
+    name: str, source_cls: type[RateSourceProtocol], *, replace: bool = False
+) -> None:
+    """Register a rate source class under ``name``.
+
+    Accepts any class with a ``name`` attribute/property and a coroutine
+    ``get_prices``; ``RateSourceBase`` subclasses qualify.
+    """
+    if not _conforms(source_cls):
+        raise TypeError(f"{source_cls!r} does not conform to RateSourceProtocol")
     if name in RATE_ORACLE_SOURCES and not replace:
         raise ValueError(f"Rate source '{name}' is already registered")
     RATE_ORACLE_SOURCES[name] = source_cls
@@ -28,7 +57,7 @@ def unregister_source(name: str) -> None:
     RATE_ORACLE_SOURCES.pop(name, None)
 
 
-def get_source_class(name: str) -> type[RateSourceBase]:
+def get_source_class(name: str) -> type[RateSourceProtocol]:
     """Look up a registered source class by name."""
     try:
         return RATE_ORACLE_SOURCES[name]

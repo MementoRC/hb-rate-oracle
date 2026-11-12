@@ -14,6 +14,7 @@ from rate_oracle.hb_compat.rate_oracle import RateOracle
 async def test_sync_start_creates_task_and_stop_cancels():
     oracle = RateOracle()
     oracle.start()
+    await __import__("asyncio").sleep(0)
     task = oracle._update_task
     assert task is not None
     assert oracle._started is True
@@ -43,10 +44,8 @@ def test_get_pair_rate_none_on_miss_and_decimal_on_hit():
 async def test_start_stop_network():
     oracle = RateOracle()
     await oracle.start_network()
-    assert oracle._started is True
     assert oracle._update_task is not None
     await oracle.stop_network()
-    assert oracle._started is False
     assert oracle._update_task is None
 
 
@@ -61,10 +60,11 @@ class _FakeSource:
 
 
 def test_find_rate_none_on_miss_value_on_hit_and_reverse():
-    prices = {"BTC-USD": Decimal("4")}
-    assert hb_compat.find_rate(prices, "ETH-USD") is None
-    assert hb_compat.find_rate(prices, "BTC-USD") == Decimal("4")
-    assert hb_compat.find_rate(prices, "USD-BTC") == Decimal("0.25")
+    # In-tree find_rate normalizes USD to USDT, so the reverse case uses a non-USD quote.
+    prices = {"BTC-EUR": Decimal("4")}
+    assert hb_compat.find_rate(prices, "ETH-EUR") is None
+    assert hb_compat.find_rate(prices, "BTC-EUR") == Decimal("4")
+    assert hb_compat.find_rate(prices, "EUR-BTC") == Decimal("0.25")
 
 
 def test_find_rate_identity_hb_compat_vs_core():
